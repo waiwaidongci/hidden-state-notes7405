@@ -35,7 +35,7 @@ Compose恰好frontend/backend/worker/db/redis五服务，各有健康检查。Ng
 3. 对照 `YX1-固定参数-v1` 的π、转移A、发射B。真实0保持0，不加epsilon；任何超行和容差的输入拒绝。
 4. “固定模型推断”默认选前20条，可清空/勾选1–30条。选模型版本后提交；任务冻结profile与所选轨迹，不更新参数。
 5. A研究20条/800码，实际总logL约−969.126197943428。首条logL约−49.50643547，线性概率以3.159572e−22等科学记数法展示，不误显示为0。
-6. 在“后验与联合路径”逐轨迹看真实状态带、每时刻后验和Viterbi联合logP；单点最高态拼接可能违反零转移，不能直接当联合MAP。
+6. 在“后验与联合路径”逐轨迹看真实状态带、每时刻后验和Viterbi联合logP；单点最高态拼接可能违反零转移，不能直接当联合MAP。切换次数看完整后验分布、期望与至少一次概率——按全部合法完整路径在log域计数，零转移路径保持零概率。
 7. 核对 `YX-33C 受限发射序列`：若新观测出现初态不可能发射的C，任务明确失败，不把数值下溢当不可能，也不把0改成小正数。
 8. 提交工况核对说明，回看设备记录和码含义。顾临批准/退回；程沅下载批准快照CSV。重复审批409，后续改轨迹不改写既有结果。
 9. 在“过程留痕”核对导入、版本冻结、轨迹修订、队列、审批和导出；HTTP响应含X-Request-ID。
@@ -48,6 +48,8 @@ Compose恰好frontend/backend/worker/db/redis五服务，各有健康检查。Ng
 
 Viterbi在相同log空间用max替代sum，保留每个状态的最佳前缀路径。相同浮点log分数时选状态索引序列的字典序最小者（比较最早不同一步），边际并列取最小状态index；没有随机平局。有限浮点不承诺无限精度的数学平局辨识。
 
+切换次数后验按**完整状态路径**计算，不用逐时后验拼接，也不只数Viterbi一条最优路径。增广状态前向DP在log域维护`f_t(j,n)`：到第t步处于j且整条前缀恰好切换n次的log联合质量，保持项经`log A(j,j)`沿用n，切换项只从`i≠j`且`log A(i,j)`有限的状态进入并把计数加一；末步对状态求和得到每个n的log质量，再做log域softmax（先减最大值）得到完整后验分布。零转移始终是−∞、不加epsilon，禁止路径保持零质量。分布长度为T（次数0..T−1），同时给出`expected_switches`与`probability_at_least_one=1−P(0次)`，以及每个桶的未归一化`log_mass`（精确零桶为null）。单码轨迹没有转移，分布确定为0次的点质量；线性概率下溢时log质量仍有限，log域softmax保证分布照常可分析。旧版结果JSON没有`switch_count`字段：结果页与CSV保留原logL/后验/Viterbi口径并明确标注“旧版结果缺少切换次数统计”，重新排队推断（冻结输入不变）才生成新统计；新推断的指纹版本随算法口径升级为v2。
+
 零概率取−∞；返回JSON的log数组用null明确表示−∞，不是漏测。若某步所有路径均零，抛出“不可能序列”并标整个任务failed，不拼接部分成功结果。若线性概率相乘下溢但logL有限，仍正常完成，线性概率字段为null并单独标记下溢。200步、单步发射1e−4的校验得到logL−1842.0680743952而线性概率下溢。
 
 标准二态三步校验π=.6/.4，A=.7,.3/.4,.6，B=.5,.4,.1/.1,.3,.6，观测0/1/2：全部8路径精确likelihood907/25000，logL−3.316488653735，联合MAP001。
@@ -58,7 +60,7 @@ Viterbi在相同log空间用max替代sum，保留每个状态的最佳前缀路�
 
 ## 实体、工程与校验
 
-78个有职责的Python/TS/Vue/CSS文件（不含空包、依赖和dist）。五实体SequenceStudy → ModelProfile → ObservationTrace → InferenceRun → InterpretationNote贯穿ORM/schema/service/routes、前端API/store和六页：隐态总览、观测与版本、固定模型推断、后验与联合路径、工况核对、过程留痕。
+79个有职责的Python/TS/Vue/CSS文件（不含空包、依赖和dist）。五实体SequenceStudy → ModelProfile → ObservationTrace → InferenceRun → InterpretationNote贯穿ORM/schema/service/routes、前端API/store和六页：隐态总览、观测与版本、固定模型推断、后验与联合路径、工况核对、过程留痕。
 
 前端 `src/{api,stores,types,components/common,hooks,pages,router,utils,constants}`；后端 `src/{routes,controllers,services,models,schemas,middlewares,utils,constants,config}`，另scripts/seed_demo.py与migrations/。StateBands、InferenceSummary、ProfileMatrix、RunList多页复用，PosteriorGrid只展示后端后验；useTask/useRoute与format处理交互。Vue的id=app/mount('#app')匹配。
 
@@ -73,7 +75,7 @@ MySQL累计logL及最大归一delta列用DOUBLE(asdecimal=False)，保持Python 
 |前端|Vue3 / TypeScript / Vite6.4.6，Barlow+Noto Serif SC，石墨/温黄/赤铜状态带|
 |后端|Python3.11 / FastAPI / SQLAlchemy / MySQL8|
 |队列|Celery5.4 / Kombu5.4.2 / Redis7，worker并发1|
-|算法|SciPy logsumexp前后向、手写log Viterbi、真实零约束与归一记录|
+|算法|SciPy logsumexp前后向、手写log Viterbi、完整路径增广状态log DP切换次数后验、真实零约束与归一记录|
 
 本地前端 `cd frontend && npm ci && npm run dev`；`npm run build`执行vue-tsc/Vite。后端安装requirements、配置DATABASE_URL/REDIS_URL/JWT_SECRET后运行uvicorn。ORM create_all初始化，migrations仅初始结构说明，不声称生产迁移链。MIT许可证见LICENSE。
 
